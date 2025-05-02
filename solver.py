@@ -2,6 +2,11 @@ import json
 import os
 from collections import defaultdict
 
+from random import shuffle
+
+elo = defaultdict(lambda: 1500)
+K_FACTOR = 32  # standard Elo K-factor
+
 wins = defaultdict(set)
 losses = defaultdict(set)
 match_counts = defaultdict(int)
@@ -41,23 +46,18 @@ def record_match(winner, loser):
     match_counts[loser] += 1
     win_counts[winner] += 1
 
-def score(item, visited=None, depth=0, max_depth=3):
-    item = item.upper()
-    if visited is None:
-        visited = set()
-    if item in visited or depth > max_depth:
-        return 0.5
-    visited.add(item)
+    update_elo(winner, loser)
 
-    if match_counts[item] == 0:
-        return 0.5
-    direct_score = win_counts[item] / match_counts[item]
-    indirect = [
-        score(opponent, visited.copy(), depth + 1, max_depth)
-        for opponent in wins[item]
-    ]
-    indirect_score = sum(indirect) / len(indirect) if indirect else 0.5
-    return 0.7 * direct_score + 0.3 * indirect_score
+def score(item, **kwargs):
+    return elo[item.upper()]
+
+def update_elo(winner, loser):
+    Ra = elo[winner]
+    Rb = elo[loser]
+    Ea = 1 / (1 + 10 ** ((Rb - Ra) / 400))
+    Eb = 1 - Ea
+    elo[winner] += K_FACTOR * (1 - Ea)
+    elo[loser] += K_FACTOR * (0 - Eb)
 
 def predict(item1, item2):
     item1 = item1.upper()
@@ -135,6 +135,46 @@ def load():
     win_counts.update(data["win_counts"])
     print(f"Loaded from {SAVE_FILE}")
 
+    # Reconstruct matches
+    matches = []
+    for winner, losers in wins.items():
+        for loser in losers:
+            matches.append((winner, loser, winner))
+
+    # Shuffle and compute Elo 5 times, then average
+    elo_runs = []
+    for _ in range(5):
+        shuffle(matches)
+        temp_elo = defaultdict(lambda: 1500)
+        for a, b, w in matches:
+            a = a.upper()
+            b = b.upper()
+            if w == a:
+                Ra = temp_elo[a]
+                Rb = temp_elo[b]
+                Ea = 1 / (1 + 10 ** ((Rb - Ra) / 400))
+                temp_elo[a] += K_FACTOR * (1 - Ea)
+                temp_elo[b] += K_FACTOR * (0 - (1 - Ea))
+            else:
+                Ra = temp_elo[a]
+                Rb = temp_elo[b]
+                Eb = 1 / (1 + 10 ** ((Ra - Rb) / 400))
+                temp_elo[b] += K_FACTOR * (1 - Eb)
+                temp_elo[a] += K_FACTOR * (0 - (1 - Eb))
+        elo_runs.append(temp_elo)
+
+    # Average Elo scores over 5 runs
+    elo.clear()
+    all_players = set()
+    for run in elo_runs:
+        all_players.update(run.keys())
+
+    for player in all_players:
+        avg = sum(run[player] for run in elo_runs) / len(elo_runs)
+        elo[player] = avg
+
+    print("Calculated elo scores (averaged over 5 shuffled runs):")
+
 def main():
     print("Welcome to Game Predictor!")
     print("Commands:")
@@ -155,7 +195,12 @@ def main():
             parts = cmd.split()
             if parts[0] == "win" and len(parts) == 3:
                 record_match(parts[1], parts[2])
+            elif parts[0] == "w" and len(parts) == 3:
+                record_match(parts[1], parts[2])
             elif parts[0] == "predict" and len(parts) == 3:
+                winner = predict(parts[1], parts[2])
+                print("Predicted winner:", winner)
+            elif parts[0] == "p" and len(parts) == 3:
                 winner = predict(parts[1], parts[2])
                 print("Predicted winner:", winner)
             elif parts[0] == "scores":
